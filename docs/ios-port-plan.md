@@ -71,9 +71,15 @@ iOS included. So an iOS build today compiles the macOS path everywhere — which
 is convenient (all the good Darwin paths activate) but fatal in specific places:
 `shm_open`, `ucontext` fibers, `_Exit()`, bundle-relative writes.
 
-**Fix:** add `REX_PLATFORM_IOS` (from `TARGET_OS_IPHONE`) and `REX_PLATFORM_APPLE`
-for genuinely shared Darwin behaviour, then audit all 86 `REX_PLATFORM_MAC`
-occurrences across 33 files and classify each. Also add an `iOS` branch to the
+**Fix (revised during implementation):** add `REX_PLATFORM_IOS` (from
+`TARGET_OS_IPHONE`), `REX_PLATFORM_MACOS`, and `REX_PLATFORM_APPLE`, but leave
+`REX_PLATFORM_MAC` meaning "Darwin" rather than narrowing it to desktop macOS.
+The original plan was to reclassify all 86 occurrences across 33 files; that is
+both a large diff and the wrong default, because the large majority of them —
+arm64 `mcontext` decoding, Metal surfaces, 16 KiB page handling, Darwin thread
+naming — are correct on iOS, and narrowing the macro would switch them all off
+at once. Only the handful that genuinely differ get an explicit
+`REX_PLATFORM_IOS` guard. Also add an `iOS` branch to the
 root `CMakeLists.txt` platform detection (`:127-165`), which today would label an
 iOS build `macos-arm64`. There is `REX_PLATFORM_ANDROID` precedent in the same
 header, and the vestigial Android scaffolding (a non-desktop surface type, a
@@ -98,12 +104,19 @@ On POSIX the backing is `shm_open` + `ftruncate` + `mmap`
 for non-app-group names, and Darwin's `SHM_NAME_MAX` of 31 is already tight.
 
 **Fix — a feature, not a workaround:** back the mapping with a regular file in
-the app container (`Library/Caches`), `open` + `ftruncate` + `mmap(MAP_SHARED)`.
-Aliasing semantics are preserved exactly, and `MapFileView`
+the app container, `open` + `ftruncate` + `mmap(MAP_SHARED)`. Aliasing semantics
+are preserved exactly, and `MapFileView`
 (`src/core/memory_posix.cpp:432-460`) already uses `MAP_FIXED`. The upside is
 that dirty guest pages become file-backed and therefore *evictable*, which is
 what you want against jetsam — anonymous memory is not reclaimable and counts
-against you in full. Mark the file `NSURLIsExcludedFromBackupKey`.
+against you in full.
+
+Refined during implementation: open the file under `TMPDIR` and `unlink` it
+immediately. The descriptor keeps the inode alive, so mapping is unaffected,
+while the space is reclaimed automatically on close *or on crash*, and there is
+no directory entry — which means the backup exclusion this plan originally
+called for is unnecessary. **Implemented and verified** (SDK patch 0002); see
+`tests/ios/guest_alias_test.cpp`.
 
 Fallback if file-backing proves too slow: `mach_make_memory_entry_64` +
 `mach_vm_map`, which aliases anonymous memory and is sandbox-legal, but gives up
@@ -391,13 +404,14 @@ Ordered so each step unblocks the next and produces a checkable signal.
 1. **Fork the SDK.** Fork `mchughalex/rexglue-skate3`, branch `ios`, repoint
    `.gitmodules`. Record the upstream commit we branched from — we will be
    rebasing.
-2. **Platform seam (B1).** `REX_PLATFORM_IOS` / `REX_PLATFORM_APPLE` in
-   `include/rex/platform.h`; iOS branch in the SDK's platform detection;
-   classify all 86 `REX_PLATFORM_MAC` sites. Its own commit, a no-op for macOS.
-3. **Toolchain + CMake (B8, B9, B10).** iOS toolchain file and `ios-*` presets,
-   relaxed compiler-ID check, tests off, `rexglue` excluded from the device
-   configuration, two-tree build documented. Target: SDK core library *compiles*
-   for `arm64-apple-ios` (not linking yet).
+2. ~~**Platform seam (B1).**~~ **Done** — SDK patch 0001. `REX_PLATFORM_IOS` /
+   `REX_PLATFORM_MACOS` / `REX_PLATFORM_APPLE`, iOS branch in the SDK's platform
+   detection, no-op for macOS.
+3. **Toolchain + CMake (B8, B9, B10).** *Partly done* — toolchain file
+   (`cmake/ios.toolchain.cmake`), `ios-*` presets, relaxed compiler-ID check,
+   tests off, and the bundle/plist/entitlements are in. Still to do: exclude
+   `rexglue` from the device configuration and confirm the two-tree build works.
+   Target: SDK core library *compiles* for `arm64-apple-ios` (not linking yet).
 4. **Third-party sweep.** SDL3, volk, Vulkan-Headers, VMA, imgui+FreeType,
    fmt/spdlog, tomlplusplus, snappy, xxHash, libmspack, simde, glslang,
    SPIRV-Tools, FFmpeg. FFmpeg already has its aarch64 NEON `.S` sources wired,
@@ -405,11 +419,14 @@ Ordered so each step unblocks the next and produces a checkable signal.
 5. **Static linking (B4).** `rexruntime` and the generated modules to `STATIC`;
    compiled-in module registry replacing `SharedLibrary`/`dlopen`. This is the
    biggest single change — budget for it.
-6. **Guest memory (B2).** Caches-file backing replacing `shm_open` under
-   `REX_PLATFORM_IOS`. Verify all nine views alias correctly with a standalone
-   on-device test before running the game.
-7. **Fibers (B5).** arm64 context-switch assembly, unit-tested against the
-   existing `Fiber` API.
+6. ~~**Guest memory (B2).**~~ **Done** - SDK patch 0002. Unlinked container-file
+   backing replacing `shm_open`. All nine views verified to alias correctly at
+   both page granularities by `tests/ios/guest_alias_test.cpp`; still to be run
+   on a device.
+7. **Fibers (B5).** *Written, not executed* - SDK patch 0003. arm64
+   context-switch assembly plus `fiber_ios.cpp`. Assembles and disassembles as
+   intended. Run `tests/ios/run_tests.sh` on an Apple Silicon Mac to exercise it
+   for the first time - highest-risk unverified item.
 8. **Signal cleanup (B6).** Resolve the `seh_posix` / `ExceptionHandler` double
    install; no throwing from handlers on iOS.
 9. **Entry point + surface (B11, B12).** SDL3 UIKit entry, guest on a 64 MB-stack
@@ -418,8 +435,9 @@ Ordered so each step unblocks the next and produces a checkable signal.
 10. **MoltenVK (B13).** `MoltenVK.xcframework` linked statically, volk from its
     `vkGetInstanceProcAddr`, `vulkan_require_geometry_shader=false`, native
     renderer forced on. Target: the SDK's ImGui overlay drawing on device.
-11. **Path policy + fonts (B14).** iOS `GetAppRootFolder`/`GetUserFolder`,
-    portable mode force-disabled, iOS font paths.
+11. ~~**Path policy + fonts (B14).**~~ **Done** - SDK patch 0004 plus the
+    game-side commit. Container-relative roots, portable mode force-disabled,
+    iOS font candidates.
 12. **Boot the game (B15).** Side-loaded pre-extracted `game/` folder, installer
     bypassed. Target: main menu rendered and navigable with a connected
     MFi/Xbox/DualSense controller — SDL3's iOS GameController backend gives us

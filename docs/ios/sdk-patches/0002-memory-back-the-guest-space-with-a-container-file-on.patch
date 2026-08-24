@@ -1,0 +1,113 @@
+From 771eb5fb8068a1a2d93f6d8931eb20f078db6ba3 Mon Sep 17 00:00:00 2001
+From: Skate3Recomp iOS port <lmccjake@gmail.com>
+Date: Mon, 24 Aug 2026 12:18:10 +0000
+Subject: [PATCH 2/4] memory: back the guest space with a container file on iOS
+
+The guest space is one 4.5 GB shared-memory object with nine overlapping
+views mapped over it, so that the 512 MB physical heap appears at guest
+0x7F000000, 0xA0000000, 0xC0000000, 0xE0000000 and 0x100000000 at once. The
+aliasing is load-bearing and rules out swapping in anonymous memory.
+
+shm_open cannot provide that inside the iOS sandbox, so iOS opens a regular
+file under TMPDIR and unlinks it immediately: the descriptor keeps the inode
+alive, MAP_SHARED aliasing is unchanged, the space is reclaimed on close or
+crash, and there is no directory entry to be backed up or shown to the user.
+APFS keeps it sparse, so the length costs nothing until pages are touched.
+
+Being file-backed is also better than the alternative here. This process
+commits over 500 MB before the title allocates anything, and clean file-backed
+pages can be evicted under pressure where anonymous pages cannot - which is
+the difference between surviving and being jetsammed on a 6 GB device.
+
+Checked with a harness that maps the real map_info table over both backends at
+4 KiB and 16 KiB granularity and asserts every aliasing relationship,
+including the 0x1000 offset on the 0xE0000000 view that is folded away once
+the host page is 16 KiB. 36 checks pass on both. Not yet run on a device.
+---
+ src/core/memory_posix.cpp | 35 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index 34a51a9..340e9f5 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -12,6 +12,7 @@
+ #include <cerrno>
+ #include <cstddef>
+ #include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <fstream>
+ #include <string>
+@@ -63,6 +64,9 @@ void AlignHostPageRange(void*& base_address, size_t& length) {
+ }  // namespace
+ 
+ // Convert filesystem path to valid shm_open name (must start with /, no other slashes)
++// iOS backs the guest space with an unlinked container file rather than shm, so
++// this is unreferenced there.
++#if !REX_PLATFORM_IOS
+ static std::string MakeShmName(const std::filesystem::path& path) {
+   std::string name = path.string();
+   for (char& c : name) {
+@@ -74,6 +78,7 @@ static std::string MakeShmName(const std::filesystem::path& path) {
+   }
+   return name;
+ }
++#endif  // !REX_PLATFORM_IOS
+ 
+ #if REX_PLATFORM_ANDROID
+ // May be null if no dynamically loaded functions are required.
+@@ -407,14 +412,40 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+       return kFileMappingHandleInvalid;
+   }
+   oflag |= O_CREAT;
++#if REX_PLATFORM_IOS
++  // POSIX shared memory is not usable inside the iOS sandbox, so the guest
++  // space is backed by a regular file in the app container instead. It is
++  // unlinked as soon as it is open: the descriptor keeps the inode alive, the
++  // space is reclaimed on close or on crash, it never has a directory entry to
++  // be backed up or seen by the user, and MAP_SHARED aliasing behaves exactly
++  // as it does over shm. APFS keeps it sparse, so the 4.5 GB length costs
++  // nothing until pages are touched.
++  //
++  // Being file-backed is also an advantage rather than a compromise here:
++  // clean pages can be evicted under memory pressure, which anonymous memory
++  // cannot be, and this process commits over 500 MB before the title starts.
++  const char* tmpdir = getenv("TMPDIR");
++  if (!tmpdir || !*tmpdir) {
++    tmpdir = "/tmp";
++  }
++  auto backing_path = std::filesystem::path(tmpdir) / path.filename();
++  int ret = open(backing_path.c_str(), oflag | O_EXCL, 0600);
++  if (ret < 0) {
++    return kFileMappingHandleInvalid;
++  }
++  unlink(backing_path.c_str());
++#else
+   auto full_path = MakeShmName(path);
+   int ret = shm_open(full_path.c_str(), oflag, 0777);
+   if (ret < 0) {
+     return kFileMappingHandleInvalid;
+   }
++#endif
+   if (ftruncate64(ret, static_cast<off_t>(length)) != 0) {
+     close(ret);
++#if !REX_PLATFORM_IOS
+     shm_unlink(full_path.c_str());
++#endif
+     return kFileMappingHandleInvalid;
+   }
+   return static_cast<FileMappingHandle>(ret);
+@@ -423,9 +454,11 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+ 
+ void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::path& path) {
+   close(static_cast<int>(handle));
+-#if !REX_PLATFORM_ANDROID
++#if !REX_PLATFORM_ANDROID && !REX_PLATFORM_IOS
+   auto full_path = MakeShmName(path);
+   shm_unlink(full_path.c_str());
++#else
++  (void)path;
+ #endif
+ }
+ 

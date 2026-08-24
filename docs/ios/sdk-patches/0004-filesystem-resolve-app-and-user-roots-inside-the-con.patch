@@ -1,0 +1,87 @@
+From a1d5b22d0935a8a03068a3e138d146ac331b3ed2 Mon Sep 17 00:00:00 2001
+From: Skate3Recomp iOS port <lmccjake@gmail.com>
+Date: Mon, 24 Aug 2026 12:23:47 +0000
+Subject: [PATCH 4/4] filesystem: resolve app and user roots inside the
+ container on iOS
+
+GetAppRootFolder returns the executable's directory, which the SDK then uses
+for the config file and the log directory, and which the game additionally
+uses for portable.txt, saves/ and dlc/. On iOS that directory is the
+code-signed bundle and every one of those writes fails.
+
+iOS now resolves it to Documents, which is writable and is what appears over
+file sharing - convenient, since a side-loaded game/ folder has to land
+somewhere the user can reach. GetUserFolder moves from the XDG layout to
+Library/Application Support.
+
+Both derive from HOME, which is the data container on iOS, so rexcore stays
+free of a Foundation dependency. NSSearchPathForDirectoriesInDomains is the
+equivalent if that ever proves unreliable.
+
+Checked by extracting both functions and running them against a fake
+container: the roots come back as expected, are created if missing, and are
+writable; with iOS off, the macOS .app unwrapping and the XDG fallback are
+unchanged.
+---
+ src/core/filesystem_posix.cpp | 40 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+diff --git a/src/core/filesystem_posix.cpp b/src/core/filesystem_posix.cpp
+index 6e65d8a..5c09b45 100644
+--- a/src/core/filesystem_posix.cpp
++++ b/src/core/filesystem_posix.cpp
+@@ -95,7 +95,39 @@ std::filesystem::path GetExecutableFolder() {
+   return GetExecutablePath().parent_path();
+ }
+ 
++#if REX_PLATFORM_IOS
++namespace {
++
++// On iOS, HOME is the app's data container. Deriving the standard subfolders
++// from it keeps rexcore free of a Foundation dependency; if this ever proves
++// unreliable, the equivalent is NSSearchPathForDirectoriesInDomains.
++std::filesystem::path IosContainerSubfolder(const char* relative) {
++  const char* home = std::getenv("HOME");
++  if (!home || !*home) {
++    return {};
++  }
++  std::filesystem::path result = std::filesystem::path(home) / relative;
++  std::error_code ec;
++  std::filesystem::create_directories(result, ec);
++  return result;
++}
++
++}  // namespace
++#endif
++
+ std::filesystem::path GetAppRootFolder() {
++#if REX_PLATFORM_IOS
++  // The executable's folder is the code-signed .app bundle, which is read-only,
++  // and this path is used for the config file and the log directory. Documents
++  // is the writable equivalent, and it is what shows up over file sharing -
++  // which is also where a side-loaded game/ folder is expected to land.
++  auto documents = IosContainerSubfolder("Documents");
++  if (!documents.empty()) {
++    return documents;
++  }
++  // Fall through to the bundle path only if HOME is somehow unset; callers
++  // will fail on write rather than silently using the wrong root.
++#endif
+   auto folder = GetExecutableFolder();
+ #if REX_PLATFORM_MAC
+   // <root>/<name>.app/Contents/MacOS/<exe> -> <root>
+@@ -111,6 +143,14 @@ std::filesystem::path GetAppRootFolder() {
+ }
+ 
+ std::filesystem::path GetUserFolder() {
++#if REX_PLATFORM_IOS
++  // XDG would put user data in <container>/.local/share. Application Support is
++  // the platform-idiomatic location and is excluded from the user's view.
++  auto support = IosContainerSubfolder("Library/Application Support");
++  if (!support.empty()) {
++    return support;
++  }
++#endif
+   // get preferred data home
+   char* home = std::getenv("XDG_DATA_HOME");
+   if (home) {

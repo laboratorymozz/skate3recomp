@@ -50,6 +50,21 @@
       }
     },
     {
+      "name": "ios-base",
+      "hidden": true,
+      "inherits": "base",
+      "toolchainFile": "${sourceDir}/cmake/ios.toolchain.cmake",
+      "cacheVariables": {
+        "REXGLUE_BUILD_TESTS": "OFF",
+        "REXGLUE_ENABLE_TRACY": "OFF"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
       "name": "debug",
       "displayName": "Debug",
       "inherits": "base",
@@ -104,6 +119,22 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "ios-relwithdebinfo",
+      "displayName": "iOS RelWithDebInfo",
+      "inherits": "ios-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "ios-release",
+      "displayName": "iOS Release",
+      "inherits": "ios-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -134,6 +165,14 @@
     {
       "name": "macos-release",
       "configurePreset": "macos-release"
+    },
+    {
+      "name": "ios-relwithdebinfo",
+      "configurePreset": "ios-relwithdebinfo"
+    },
+    {
+      "name": "ios-release",
+      "configurePreset": "ios-release"
     }
   ]
 }

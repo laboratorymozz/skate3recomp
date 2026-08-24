@@ -1,0 +1,64 @@
+From b64679980e5c8a32e15d72be5ad5df6762ad0db1 Mon Sep 17 00:00:00 2001
+From: Skate3Recomp iOS port <lmccjake@gmail.com>
+Date: Mon, 24 Aug 2026 12:16:20 +0000
+Subject: [PATCH 1/4] platform: tell iOS apart from macOS
+
+TargetConditionals.h defines TARGET_OS_MAC as 1 on every Apple platform, so
+an iOS build currently takes the macOS branch throughout. That is mostly what
+we want - the arm64 mcontext decoding, Metal surface creation, 16 KiB page
+handling and Darwin thread naming are all correct on a phone - so
+REX_PLATFORM_MAC keeps meaning "Darwin" rather than being narrowed, which
+would have switched off all 86 of its uses at once.
+
+Adds REX_PLATFORM_IOS and REX_PLATFORM_MACOS for the few places where the two
+genuinely differ, and REX_PLATFORM_APPLE as a clearer spelling of the shared
+case. No behaviour change on any currently supported platform.
+---
+ include/rex/platform.h | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/include/rex/platform.h b/include/rex/platform.h
+index 57d8cf6..499219b 100644
+--- a/include/rex/platform.h
++++ b/include/rex/platform.h
+@@ -28,8 +28,24 @@
+ #include <TargetConditionals.h>
+ #endif
+ 
++// NOTE: TargetConditionals.h defines TARGET_OS_MAC as 1 on *every* Apple
++// platform, iOS included. REX_PLATFORM_MAC therefore means "Darwin", not
++// "desktop macOS", and is left that way deliberately: the large majority of the
++// existing REX_PLATFORM_MAC sites (arm64 mcontext decoding, Metal surfaces,
++// 16 KiB page handling, Darwin thread naming) are correct on iOS as well, and
++// narrowing the macro would silently switch all of them off.
++//
++// Use REX_PLATFORM_IOS / REX_PLATFORM_MACOS at the handful of places where the
++// two genuinely differ - POSIX shared memory, ucontext fibers, self-terminating
++// exit, and writes next to the executable.
+ #if defined(TARGET_OS_MAC) && TARGET_OS_MAC
+ #define REX_PLATFORM_MAC 1
++#define REX_PLATFORM_APPLE 1
++#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
++#define REX_PLATFORM_IOS 1
++#else
++#define REX_PLATFORM_MACOS 1
++#endif
+ #elif defined(WIN32) || defined(_WIN32)
+ #define REX_PLATFORM_WIN32 1
+ #elif defined(__ANDROID__)
+@@ -47,6 +63,15 @@
+ #ifndef REX_PLATFORM_MAC
+ #define REX_PLATFORM_MAC 0
+ #endif
++#ifndef REX_PLATFORM_APPLE
++#define REX_PLATFORM_APPLE 0
++#endif
++#ifndef REX_PLATFORM_IOS
++#define REX_PLATFORM_IOS 0
++#endif
++#ifndef REX_PLATFORM_MACOS
++#define REX_PLATFORM_MACOS 0
++#endif
+ #ifndef REX_PLATFORM_WIN32
+ #define REX_PLATFORM_WIN32 0
+ #endif

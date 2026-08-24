@@ -1,0 +1,324 @@
+From c8310ae13a0e8832cd80cc8f01ce4f1e2afa0a2e Mon Sep 17 00:00:00 2001
+From: Skate3Recomp iOS port <lmccjake@gmail.com>
+Date: Mon, 24 Aug 2026 12:22:18 +0000
+Subject: [PATCH 3/4] thread: hand-written arm64 fiber switch for iOS
+
+getcontext/makecontext/swapcontext are absent from the iOS SDK, and the fiber
+primitive is not optional - guest thread scheduling in xthread.cpp and
+kernel_state.cpp is built on it.
+
+fiber_arm64_apple.S saves and restores the AAPCS64 callee-saved set (x19-x28,
+x29, x30, d8-d15) in a 160-byte 16-byte-aligned frame. fiber_ios.cpp fabricates
+one of those frames by hand when starting a fiber, with the link register slot
+pointing at Trampoline and a null frame pointer so backtraces terminate at the
+base of the fiber stack instead of running on into unrelated memory. Semantics
+match the POSIX backend exactly, so nothing above this changes.
+
+This is register movement, not code generation: no JIT entitlement, no W^X
+concern. It targets arm64, not arm64e, so it does not sign return addresses.
+
+fiber_posix.cpp now excludes iOS explicitly, since REX_PLATFORM_MAC is true
+there as well.
+
+Checked: assembles for arm64-apple-ios and disassembles to the intended frame
+layout, with the offsets the C++ side assumes; fiber_ios.cpp compiles clean for
+iOS and emits no symbols off it; fiber_posix.cpp still builds for macOS. The
+switch has not been executed - see tests/ios in the game repo for a round-trip
+test that runs natively on an Apple Silicon Mac.
+---
+ CMakeLists.txt               | 29 +++++++++--
+ include/rex/thread/fiber.h   | 10 ++++
+ src/core/CMakeLists.txt      |  8 +++
+ src/core/fiber_arm64_apple.S | 72 ++++++++++++++++++++++++++
+ src/core/fiber_ios.cpp       | 99 ++++++++++++++++++++++++++++++++++++
+ src/core/fiber_posix.cpp     |  4 +-
+ 6 files changed, 216 insertions(+), 6 deletions(-)
+ create mode 100644 src/core/fiber_arm64_apple.S
+ create mode 100644 src/core/fiber_ios.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4392ea4..368aaac 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -74,12 +74,18 @@ elseif(UNIX AND NOT APPLE)
+     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+ endif()
+ 
+-# Enforce Clang18 compiler
++# Enforce Clang18 compiler.
++# AppleClang is accepted for iOS builds only: it uses its own version numbering
++# (Xcode 16 reports 16.x while being based on LLVM 17+), so the numeric floor
++# below cannot be applied to it. Cross-compiling to iOS with upstream Clang and
++# -isysroot is the better-tested route and still takes the strict path.
+ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+-    message(FATAL_ERROR "ReXGlue requires Clang compiler. Please set CMAKE_CXX_COMPILER to clang++")
+-endif()
+-
+-if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "18.0")
++    if(IOS AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
++        message(STATUS "ReXGlue: building with AppleClang ${CMAKE_CXX_COMPILER_VERSION} for iOS")
++    else()
++        message(FATAL_ERROR "ReXGlue requires Clang compiler. Please set CMAKE_CXX_COMPILER to clang++")
++    endif()
++elseif(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "18.0")
+     message(FATAL_ERROR "ReXGlue requires Clang 18 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
+ endif()
+ 
+@@ -140,6 +146,19 @@ if(WIN32)
+         message(FATAL_ERROR "Unsupported Windows architecture: ${REX_TARGET_PROCESSOR}")
+     endif()
+     add_compile_definitions(REX_PLATFORM_WINDOWS=1)
++elseif(IOS)
++    # CMake sets APPLE for iOS as well, so this arm has to come first.
++    if(REX_TARGET_PROCESSOR MATCHES "aarch64|arm64|ARM64")
++        set(REX_PLATFORM "ios-arm64")
++    else()
++        message(FATAL_ERROR "Unsupported iOS architecture: ${REX_TARGET_PROCESSOR}. iOS builds are ARM64-only.")
++    endif()
++    # REX_PLATFORM_MAC stays on: it means Darwin, and the shared Apple paths are
++    # correct on iOS. See the note in include/rex/platform.h.
++    add_compile_definitions(REX_PLATFORM_MAC=1 REX_PLATFORM_IOS=1)
++    # The fiber context switch is hand-written assembly, because the iOS SDK
++    # has no ucontext.
++    enable_language(ASM)
+ elseif(APPLE)
+     if(REX_TARGET_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+         set(REX_PLATFORM "macos-arm64")
+diff --git a/include/rex/thread/fiber.h b/include/rex/thread/fiber.h
+index c80e029..04a7832 100644
+--- a/include/rex/thread/fiber.h
++++ b/include/rex/thread/fiber.h
+@@ -61,6 +61,16 @@ struct Fiber {
+   void* arg_ = nullptr;
+   bool is_thread_fiber_ = false;
+ 
++  static void Trampoline();
++#elif REX_PLATFORM_IOS
++  // Must precede the REX_PLATFORM_MAC arm, which is also true on iOS.
++  // sp_ is the saved stack pointer; see fiber_arm64_apple.S.
++  void* sp_ = nullptr;
++  std::vector<uint8_t> stack_;
++  void (*entry_)(void*) = nullptr;
++  void* arg_ = nullptr;
++  bool is_thread_fiber_ = false;
++
+   static void Trampoline();
+ #elif REX_PLATFORM_MAC
+   void* context_ = nullptr;
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index 1f8f278..07f24df 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -63,6 +63,14 @@ elseif(UNIX)
+         system_posix.cpp
+         threading_posix.cpp
+     )
++    if(IOS)
++        # fiber_posix.cpp compiles to nothing on iOS - the SDK there has no
++        # ucontext - so the fiber primitive comes from these instead.
++        target_sources(rexcore PRIVATE
++            fiber_ios.cpp
++            fiber_arm64_apple.S
++        )
++    endif()
+ endif()
+ 
+ target_include_directories(rexcore PUBLIC
+diff --git a/src/core/fiber_arm64_apple.S b/src/core/fiber_arm64_apple.S
+new file mode 100644
+index 0000000..bdabe8f
+--- /dev/null
++++ b/src/core/fiber_arm64_apple.S
+@@ -0,0 +1,72 @@
++/**
++ * @file        rex/core/fiber_arm64_apple.S
++ * @brief       arm64 context switch backing rex::thread::Fiber on iOS
++ *
++ * getcontext/makecontext/swapcontext are unavailable in the iOS SDK, so the
++ * fiber primitive needs its own switch. This is data movement only - it saves
++ * and restores registers, it does not generate or modify code, so it needs no
++ * JIT entitlement and does not violate W^X.
++ *
++ * Only the AAPCS64 callee-saved state has to be preserved across the switch,
++ * because a switch always happens through a function call boundary and the
++ * caller has already spilled anything caller-saved it cares about:
++ *
++ *   x19-x28   callee-saved general purpose      80 bytes
++ *   x29, x30  frame pointer and link register   16 bytes
++ *   d8-d15    callee-saved SIMD (low 64 bits)   64 bytes
++ *                                              ---------
++ *                                              160 bytes, 16-byte aligned
++ *
++ * Keep the layout in sync with kFrameBytes and the slot offsets in
++ * fiber_ios.cpp, which fabricates one of these frames by hand to start a new
++ * fiber.
++ *
++ * This targets arm64, which is what apps are built for. It does not sign the
++ * return address, so it must not be assembled for arm64e without adding
++ * pacibsp/retab.
++ */
++
++#if defined(__aarch64__) || defined(__arm64__)
++
++.text
++.p2align 2
++.global _rex_fiber_switch
++
++// void rex_fiber_switch(void** save_sp, void* restore_sp);
++//   x0 = where to store the outgoing stack pointer
++//   x1 = stack pointer to resume
++_rex_fiber_switch:
++    sub     sp, sp, #160
++    stp     x19, x20, [sp, #0]
++    stp     x21, x22, [sp, #16]
++    stp     x23, x24, [sp, #32]
++    stp     x25, x26, [sp, #48]
++    stp     x27, x28, [sp, #64]
++    stp     x29, x30, [sp, #80]
++    stp     d8,  d9,  [sp, #96]
++    stp     d10, d11, [sp, #112]
++    stp     d12, d13, [sp, #128]
++    stp     d14, d15, [sp, #144]
++
++    // Hand the outgoing context back to the caller, then adopt the incoming one.
++    mov     x2, sp
++    str     x2, [x0]
++    mov     sp, x1
++
++    ldp     x19, x20, [sp, #0]
++    ldp     x21, x22, [sp, #16]
++    ldp     x23, x24, [sp, #32]
++    ldp     x25, x26, [sp, #48]
++    ldp     x27, x28, [sp, #64]
++    ldp     x29, x30, [sp, #80]
++    ldp     d8,  d9,  [sp, #96]
++    ldp     d10, d11, [sp, #112]
++    ldp     d12, d13, [sp, #128]
++    ldp     d14, d15, [sp, #144]
++    add     sp, sp, #160
++
++    // Returns into the restored x30: either the point the target last switched
++    // from, or Trampoline for a fiber being started for the first time.
++    ret
++
++#endif  // __aarch64__ || __arm64__
+diff --git a/src/core/fiber_ios.cpp b/src/core/fiber_ios.cpp
+new file mode 100644
+index 0000000..68e9fb1
+--- /dev/null
++++ b/src/core/fiber_ios.cpp
+@@ -0,0 +1,99 @@
++/**
++ * @file        rex/core/fiber_ios.cpp
++ * @brief       iOS backend for rex::thread::Fiber
++ *
++ * @copyright   Copyright (c) 2026 Tom Clay <tomc@tctechstuff.com>
++ *              All rights reserved.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ *
++ * The ucontext family that fiber_posix.cpp is built on is deprecated on macOS
++ * and absent from the iOS SDK, so iOS switches contexts with the hand-written
++ * arm64 routine in fiber_arm64_apple.S. Semantics are identical to the POSIX
++ * backend: Trampoline reads entry_/arg_ from tls_current_, which SwitchTo sets
++ * before switching.
++ */
++
++#include <rex/platform.h>
++#if REX_PLATFORM_IOS
++
++#include <rex/thread/fiber.h>
++
++#include <cassert>
++#include <cstdint>
++#include <cstring>
++
++extern "C" void rex_fiber_switch(void** save_sp, void* restore_sp);
++
++namespace rex::thread {
++
++thread_local Fiber* Fiber::tls_current_ = nullptr;
++
++namespace {
++
++// Must match the frame written by rex_fiber_switch in fiber_arm64_apple.S.
++constexpr size_t kFrameBytes = 160;
++constexpr size_t kSlotX29 = 80;
++constexpr size_t kSlotX30 = 88;
++
++}  // namespace
++
++Fiber* Fiber::ConvertCurrentThread() {
++  // Nothing to capture up front: the running context is written into sp_ by the
++  // first SwitchTo away from this fiber.
++  auto* f = new Fiber();
++  f->is_thread_fiber_ = true;
++  tls_current_ = f;
++  return f;
++}
++
++Fiber* Fiber::Create(size_t stack_size, void (*entry)(void*), void* arg) {
++  auto* f = new Fiber();
++  f->entry_ = entry;
++  f->arg_ = arg;
++  f->stack_.resize(stack_size);
++
++  // Fabricate the frame rex_fiber_switch expects to pop, so that the first
++  // switch to this fiber returns straight into Trampoline on the new stack.
++  uintptr_t top = reinterpret_cast<uintptr_t>(f->stack_.data()) + f->stack_.size();
++  top &= ~uintptr_t(15);  // AAPCS64 requires a 16-byte aligned sp
++  uintptr_t frame = top - kFrameBytes;
++
++  auto* slots = reinterpret_cast<uint8_t*>(frame);
++  std::memset(slots, 0, kFrameBytes);
++  // A null frame pointer terminates backtraces at the base of the fiber stack
++  // rather than running off into unrelated memory.
++  *reinterpret_cast<void**>(slots + kSlotX29) = nullptr;
++  *reinterpret_cast<void**>(slots + kSlotX30) = reinterpret_cast<void*>(&Fiber::Trampoline);
++
++  f->sp_ = reinterpret_cast<void*>(frame);
++  return f;
++}
++
++/*static*/ void Fiber::Trampoline() {
++  // tls_current_ was updated by SwitchTo before the switch landed here.
++  Fiber* f = tls_current_;
++  f->entry_(f->arg_);
++}
++
++void Fiber::SwitchTo(Fiber* target) {
++  Fiber* from = tls_current_;
++  tls_current_ = target;
++  rex_fiber_switch(&from->sp_, target->sp_);
++}
++
++void Fiber::Destroy() {
++  // Thread fibers are destroyed from the owning thread itself.
++  if (is_thread_fiber_) {
++    tls_current_ = nullptr;
++  } else {
++    assert(this != tls_current_ && "Destroy called on the currently running fiber");
++  }
++  // stack_ is freed by the vector destructor.
++  delete this;
++}
++
++}  // namespace rex::thread
++
++#endif  // REX_PLATFORM_IOS
+diff --git a/src/core/fiber_posix.cpp b/src/core/fiber_posix.cpp
+index 467c426..f20ab99 100644
+--- a/src/core/fiber_posix.cpp
++++ b/src/core/fiber_posix.cpp
+@@ -14,7 +14,9 @@
+ #endif
+ 
+ #include <rex/platform.h>
+-#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
++// iOS has no ucontext and uses fiber_ios.cpp instead. REX_PLATFORM_MAC is true
++// there too, so it has to be excluded explicitly.
++#if (REX_PLATFORM_LINUX || REX_PLATFORM_MAC) && !REX_PLATFORM_IOS
+ 
+ #include <rex/thread/fiber.h>
+ 
