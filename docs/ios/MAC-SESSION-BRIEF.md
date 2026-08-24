@@ -49,14 +49,22 @@ Ordered so that everything possible *without* game data comes first.
 ```
 
 Two suites. The aliasing one has been passing on Linux and should pass here
-unchanged. **The fiber one has never executed anywhere.**
+unchanged. The fiber one now passes too — but only under emulation.
 
 It exercises the hand-written arm64 context switch that replaces `ucontext` on
 iOS (B5), built with `REX_PLATFORM_IOS=1` forced on — macOS on Apple Silicon
-shares the AAPCS64 ABI, so it runs natively without a device.
+shares the AAPCS64 ABI, so it runs natively without a device. Off Darwin the
+script falls back to an aarch64-linux cross build under qemu, and that fallback
+has been run: 10/10 checks, GCC 13 and Clang 18, -O0 through -Os. Note that the
+fiber suite needs the step 3 patches applied, so on a clean tree run step 3
+first and come back to this.
 
-This is the highest-value step in the whole brief. Distinguish carefully
-between:
+That result retires the worst of the risk — the frame layout agrees with the
+frame `fiber_ios.cpp` fabricates, and callee-saved integer and SIMD state
+survives a switch. What it cannot speak to is Darwin: Apple's thread-local
+model, its reservation of x18, unwind tables, signal and stack handling. So
+this is still the highest-value step in the brief, just a narrower one than it
+was. Distinguish carefully between:
 
 - **passes** — the switch is probably sound;
 - **fails an assertion** — the logic is wrong but the machinery works;
@@ -96,6 +104,11 @@ git remote add fork git@github.com:<you>/rexglue-skate3.git
 git checkout -b ios-port 7eb0faf
 git am ../../docs/ios/sdk-patches/*.patch
 ```
+
+The series has been confirmed to apply cleanly to `7eb0faf` with a plain
+`git am` — no fuzz, all six commits — and to be inert on Linux, checked by
+diffing preprocessed output rather than by reading the guards. macOS is the
+half that is still unchecked.
 
 Then **rebuild macOS and confirm it is still green.** Every one of these
 patches is meant to be inert off iOS.

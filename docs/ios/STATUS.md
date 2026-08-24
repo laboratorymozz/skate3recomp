@@ -20,7 +20,7 @@ order, written to be self-contained for a session starting cold.
 | Paths | Portable mode disabled on iOS (bundle is read-only); iOS font candidates ahead of the macOS ones |
 | Build | `ios-arm64` platform branch, `MACOSX_BUNDLE`, `Info.plist` template, entitlements with `increased-memory-limit`, UIKit instead of Cocoa, runtime-library staging skipped |
 | Toolchain | `cmake/ios.toolchain.cmake` and `ios-release` / `ios-relwithdebinfo` presets |
-| Tests | `tests/ios/` — two standalone harnesses, no CMake or device needed |
+| Tests | `tests/ios/` — two standalone harnesses, no CMake or device needed; the fiber one falls back to an aarch64 cross build under qemu off Darwin |
 
 ### In the SDK (as patches, not applied)
 
@@ -31,11 +31,18 @@ and B14 from the plan. See that directory's README for detail.
 
 Ordered by how likely they are to be wrong.
 
-1. **The arm64 fiber switch has never executed.** It assembles and disassembles
-   correctly, and the frame offsets match what `fiber_ios.cpp` fabricates, but
-   correct-looking context-switch assembly that has never run is exactly the kind
-   of thing that is subtly wrong. `tests/ios/run_tests.sh` exercises it natively
-   on an Apple Silicon Mac.
+1. **The arm64 fiber switch has now executed, but not on Darwin.** A later Linux
+   session cross-built it for aarch64-linux and ran it under qemu: all 10 checks
+   in `tests/ios/fiber_switch_test.cpp` pass, with GCC 13 and Clang 18, at -O0
+   through -Os. That covers the part most likely to be wrong — the frame layout
+   agreeing with what `fiber_ios.cpp` fabricates, and callee-saved integer and
+   SIMD state surviving a switch — since AAPCS64 and Apple's arm64 ABI agree
+   there and the assembly is assembled from the shipping source with only the
+   symbol prefix renamed. It says nothing about Apple's thread-local model, its
+   reservation of x18, unwind tables, or signal and stack handling, and nothing
+   about arm64e: the routine does not sign the return address. Run
+   `tests/ios/run_tests.sh` natively on an Apple Silicon Mac — that is still the
+   check that counts.
 2. **Do the SDK's dependencies build for iOS at all?** Unknown. FFmpeg is the
    likely problem, though its aarch64 assembly is already wired up. This gates
    everything and nothing here tests it.

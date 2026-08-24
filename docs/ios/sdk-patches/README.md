@@ -67,11 +67,28 @@ Verified:
   the real target shape built both ways, so patch 0006 needs no link-visibility
   changes.
 
+Verified later, on Linux, with the series applied:
+
+- **The series applies cleanly** to `7eb0faf` with a plain `git am`, all six
+  commits, no fuzz.
+- **The fiber switch runs.** Cross-built for aarch64-linux and executed under
+  qemu — all 10 checks in `tests/ios/fiber_switch_test.cpp` pass, with GCC 13
+  and Clang 18, at -O0 through -Os. See the caveats in `run_tests.sh`: this
+  covers the ABI-shared part, not anything Darwin-specific, and not arm64e.
+- **Patches 0002 and 0004 are inert on Linux**, shown rather than argued:
+  `-E` output for `fiber_posix.cpp`, `filesystem_posix.cpp` and
+  `memory_posix.cpp` is byte-identical before and after, once the one
+  unconditional change — an added `#include <cstdlib>` in `memory_posix.cpp`,
+  for `getenv` on the iOS path — is accounted for. The equivalent check for
+  macOS still needs a Mac.
+- **The CMake changes are `IOS`-gated** except for the compiler check in patch
+  0001, which is restructured from two `if` blocks into an `if`/`elseif`. Off
+  iOS it is equivalent: non-Clang still fails on the first arm, Clang still
+  reaches the 18.0 floor, and AppleClang on macOS is still rejected.
+
 Not verified — assume these are wrong until a Mac says otherwise:
 
-- **The fiber switch has never been executed.** `tests/ios/fiber_switch_test.cpp`
-  runs it natively on an Apple Silicon Mac (same ABI, no device needed). Run
-  that first; it is the highest-risk item here.
+- **Nothing here has been compiled by AppleClang, for Darwin, or for iOS.**
 - Whether the SDK's third-party dependencies build for iOS at all. FFmpeg is
   the likely problem, though its aarch64 assembly is already wired up.
 - Whether AppleClang can compile the SDK's C++23. If it cannot, cross-compile
