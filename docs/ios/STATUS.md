@@ -1,24 +1,13 @@
 # iOS port — where things stand
 
-Written in one unattended session on a Linux x86-64 container. **No part of this
-has been compiled for iOS or run on a device.** Read the "verify first" section
-before trusting anything here.
+Written on a Linux x86-64 container with no Xcode and no iOS SDK. **No part of
+this has been compiled for iOS or run on a device.** Read the "verify first"
+section before trusting anything here.
 
-## Start here in the morning
+## Start here
 
-```sh
-# 1. Run what can be run without a device. On Apple Silicon this executes the
-#    arm64 fiber switch for the first time - the highest-risk unverified item.
-./tests/ios/run_tests.sh
-
-# 2. Confirm the macOS build still works. Every SDK change should be a no-op
-#    there, and the plan's first risk item is that this bridgehead is itself
-#    unverified upstream - the SDK has no macOS CI.
-cmake --preset macos-release && cmake --build --preset macos-release
-
-# 3. Fork the SDK and apply the runtime work.
-#    See docs/ios/sdk-patches/README.md.
-```
+A Mac session picks this up: **`docs/ios/MAC-SESSION-BRIEF.md`** is the running
+order, written to be self-contained for a session starting cold.
 
 ## What landed
 
@@ -35,8 +24,8 @@ cmake --preset macos-release && cmake --build --preset macos-release
 
 ### In the SDK (as patches, not applied)
 
-`docs/ios/sdk-patches/`, five commits off `7eb0faf`. Blockers B1, B2, B5, B9 and
-B14 from the plan. See that directory's README for detail.
+`docs/ios/sdk-patches/`, six commits off `7eb0faf`. Blockers B1, B2, B4, B5, B9
+and B14 from the plan. See that directory's README for detail.
 
 ## Verify first
 
@@ -67,13 +56,10 @@ Ordered by how likely they are to be wrong.
 
 Not blocked on a Mac so much as on decisions that shouldn't be made blind:
 
-- **B4, static linking.** `rexruntime` and the generated guest modules are
-  `SHARED` and `dlopen`'d by path with a hardcoded `.so`. Converting to static
-  with a compiled-in module registry touches the codegen templates and is the
-  largest single change in milestone 1. Written unverified it would cost more in
-  review than it saves.
 - **B7/B12, entry point and lifecycle.** Needs SDL3's iOS backend in front of you.
 - **B13, MoltenVK.** Needs the xcframework to link against.
+
+B4 is no longer on this list — see the corrections below.
 
 ## Corrections to the plan
 
@@ -86,3 +72,10 @@ Both folded into `docs/ios-port-plan.md`:
 - **B2** called for marking the backing file `NSURLIsExcludedFromBackupKey`.
   Unnecessary: the file is unlinked immediately after opening, so it has no
   directory entry to back up, and its space is reclaimed even on a crash.
+- **B4** was described as the largest single change in milestone 1, converting
+  both the runtime and the generated guest modules to static with a new
+  compiled-in module registry. The guest-module half does not exist for this
+  project: neither manifest declares `[[modules]]`, so the generated code is
+  already compiled straight into the executable and the `dlopen` path is dead
+  code. Only `rexruntime` needed converting, which is one gated `add_library`
+  call. It is now done rather than deferred.

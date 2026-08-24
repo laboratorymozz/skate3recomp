@@ -415,9 +415,10 @@ if(WIN32)
 endif()
 
 # Staging a loose runtime library beside the executable is meaningless on iOS,
-# where dynamic libraries have to be embedded, signed frameworks. The runtime
-# and the generated guest modules need to become static libraries with a
-# compiled-in module registry instead - see docs/ios-port-plan.md (B4).
+# where dynamic libraries have to be embedded, signed frameworks. The SDK now
+# builds rexruntime as a static archive there, so there is nothing to stage.
+# The generated guest code was never a shared library for this project - it is
+# compiled straight into the executable via generated/sources.cmake above.
 if(NOT IOS)
     add_custom_target(skate3_stage_runtime_library
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:skate3>"

@@ -1,7 +1,7 @@
 From b64679980e5c8a32e15d72be5ad5df6762ad0db1 Mon Sep 17 00:00:00 2001
 From: Skate3Recomp iOS port <lmccjake@gmail.com>
 Date: Mon, 24 Aug 2026 12:16:20 +0000
-Subject: [PATCH 1/5] platform: tell iOS apart from macOS
+Subject: [PATCH 1/6] platform: tell iOS apart from macOS
 
 TargetConditionals.h defines TARGET_OS_MAC as 1 on every Apple platform, so
 an iOS build currently takes the macOS branch throughout. That is mostly what

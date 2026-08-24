@@ -1,7 +1,7 @@
 From a1d5b22d0935a8a03068a3e138d146ac331b3ed2 Mon Sep 17 00:00:00 2001
 From: Skate3Recomp iOS port <lmccjake@gmail.com>
 Date: Mon, 24 Aug 2026 12:23:47 +0000
-Subject: [PATCH 4/5] filesystem: resolve app and user roots inside the
+Subject: [PATCH 4/6] filesystem: resolve app and user roots inside the
  container on iOS
 
 GetAppRootFolder returns the executable's directory, which the SDK then uses

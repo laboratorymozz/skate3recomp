@@ -1,0 +1,82 @@
+From 6f147c069186554415f1c8268795a8c50d0608d1 Mon Sep 17 00:00:00 2001
+From: Skate3Recomp iOS port <lmccjake@gmail.com>
+Date: Mon, 24 Aug 2026 21:11:06 +0000
+Subject: [PATCH 6/6] build: link the runtime statically on iOS
+
+iOS has nowhere to put a loose dynamic library. Dylibs have to be embedded,
+signed frameworks, and the directory the loader would search is the read-only
+app bundle, so shipping librexruntime.dylib beside the executable - which is
+what every other platform does - is not available.
+
+Build it as a static archive there instead. The OBJECT libraries that
+src/kernel/CMakeLists.txt links in (rexcore, rexui, rexgraphics,
+rexfilesystem, rexaudio, rexinput) land in the archive exactly as they land in
+the shared object, so no source list or link visibility changes are needed.
+Every other platform keeps SHARED, since librexruntime.dylib/.so is a
+documented release artifact there.
+
+Also stop building rexcodegen on iOS, alongside the CLI that was already
+skipped. Only the CLI and the unit tests link it, so the device build loses
+nothing and no longer compiles the recompiler, inja and cli11 for a platform
+that cannot run them.
+
+Checked with a minimal CMake reproduction of the real target shape - OBJECT
+libraries linked PRIVATE into a library, consumed by an executable - built
+both ways on Linux: the static configuration links and runs identically to the
+shared one, resolving symbols from both the runtime and the object libraries.
+The macOS and Linux configurations are untouched.
+---
+ CMakeLists.txt            | 13 ++++++++-----
+ src/system/CMakeLists.txt | 14 +++++++++++++-
+ 2 files changed, 21 insertions(+), 6 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 140195e..1016db4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -252,12 +252,15 @@ add_subdirectory(src/audio)
+ add_subdirectory(src/graphics)
+ add_subdirectory(src/system)
+ add_subdirectory(src/kernel)
+-add_subdirectory(src/codegen)
+-# The rexglue CLI is a host tool: it translates the guest image into C++ before
+-# anything is compiled for the target. Cross-compiling it to iOS would produce a
+-# binary the build cannot run, so it is skipped there and codegen is expected to
+-# have been run from a host-native build tree first.
++# The recompiler is a host tool: it translates the guest image into C++ before
++# anything is compiled for the target. Cross-compiling it to iOS would produce
++# binaries the build cannot run, so both the library and the CLI are skipped
++# there and codegen is expected to have been run from a host-native build tree
++# first. Nothing in the runtime links rexcodegen - only the CLI and the unit
++# tests do - so dropping it costs the device build nothing and saves compiling
++# the whole recompiler, inja and cli11 for a platform that never runs them.
+ if(NOT IOS)
++    add_subdirectory(src/codegen)
+     add_subdirectory(src/rexglue)
+ endif()
+ 
+diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
+index d01f0ed..d8c6d49 100644
+--- a/src/system/CMakeLists.txt
++++ b/src/system/CMakeLists.txt
+@@ -45,7 +45,19 @@ set(REXSYSTEM_SOURCES
+     xex_module.cpp
+ )
+ 
+-add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
++# iOS has no place to put a loose dynamic library: dylibs must be embedded,
++# signed frameworks, and the bundle the loader would search is read-only. A
++# static archive sidesteps the whole question, and the OBJECT libraries linked
++# in by src/kernel/CMakeLists.txt land in it just as they do in the shared
++# object, so nothing else has to change.
++#
++# Kept SHARED everywhere else: librexruntime.dylib/.so is a documented release
++# artifact on the desktop platforms.
++if(IOS)
++    add_library(rexruntime STATIC ${REXSYSTEM_SOURCES})
++else()
++    add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
++endif()
+ add_library(rex::runtime ALIAS rexruntime)
+ add_library(rex::system ALIAS rexruntime)
+ add_library(rex::kernel ALIAS rexruntime)

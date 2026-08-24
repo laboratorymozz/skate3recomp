@@ -1,7 +1,7 @@
 From 3a12815ca1a52aaa35395d620570060d7218ae92 Mon Sep 17 00:00:00 2001
 From: Skate3Recomp iOS port <lmccjake@gmail.com>
 Date: Mon, 24 Aug 2026 12:27:42 +0000
-Subject: [PATCH 5/5] build: do not cross-compile the rexglue CLI to iOS
+Subject: [PATCH 5/6] build: do not cross-compile the rexglue CLI to iOS
 
 rexglue translates the guest image into C++ before anything is compiled for
 the target, so it is a host tool by nature. Under an iOS toolchain it would be

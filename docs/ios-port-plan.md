@@ -145,28 +145,49 @@ is a milestone-2 concern, but instrument from day one: log
 `os_proc_available_memory()` every frame so we know real headroom before touching
 render scale, MSAA, or draw distance.
 
-### B4 — The runtime and guest modules are shared libraries, `dlopen`'d by path
+### B4 — The runtime is a shared library (guest modules already static)
 
-`src/system/CMakeLists.txt` builds `rexruntime` as `SHARED`, and the codegen
-template `resources/templates/codegen/dll_targets_cmake.inja` emits the generated
-guest modules as `SHARED` too. They are loaded at runtime by path — and
-`src/system/shared_library.cpp:83-85` hardcodes a `.so` extension on all POSIX:
+`src/system/CMakeLists.txt:48` builds `rexruntime` as `SHARED` — the SDK's only
+shared target — which is why `CMakeLists.txt` has a
+`skate3_stage_runtime_library` target copying `$<TARGET_FILE:rexruntime>` next
+to the executable. On iOS, dynamic libraries must be embedded, signed
+`.framework`s, and the directory the loader would search is the read-only app
+bundle, so staging a loose dylib is not available.
 
-```cpp
-std::string full_name = (exe_dir / ("lib" + name + ".so")).string();
-handle_ = dlopen(full_name.c_str(), RTLD_NOW);
-```
+The SDK *also* has a path that builds recompiled guest modules as `SHARED` and
+`dlopen`s them by name (`resources/templates/codegen/dll_targets_cmake.inja`,
+`src/system/kernel_state.cpp:684-730`), with `src/system/shared_library.cpp:83`
+hardcoding a `.so` extension on all POSIX. That path is **not used by this
+project** and has never worked on Apple — see the revised fix below.
 
-This is why `CMakeLists.txt` has a `skate3_stage_runtime_library` target copying
-`$<TARGET_FILE:rexruntime>` next to the executable. On iOS, dynamic libraries
-must be embedded, signed `.framework`s — loading a bare dylib by path from the
-container does not work.
+**Fix (revised during implementation — this was substantially overstated).**
+The guest-module half of this blocker does not exist for this project. Neither
+`manifests/skate3.toml.in` nor `manifests/eawebkit.toml.in` declares a
+`[[modules]]` array, so codegen never emits `dll_targets.cmake` and never takes
+the `SHARED` path; the game compiles both generated images straight into the
+executable via `include(generated/sources.cmake)`, and registers EAWebkit's
+functions by hand from `func_mappings` in `src/skate3_app_common.cpp:816-828` —
+already the compiled-in registry this section asks for. The
+`SharedLibrary::Load` branch in `src/system/kernel_state.cpp:684-730` is
+therefore dead code here, and was never reachable on Apple anyway given the
+hardcoded `.so`.
 
-**Fix:** convert `rexruntime` and the generated guest modules to `STATIC` and
-replace `SharedLibrary` / `LoadUserModule` with a compiled-in module registry.
-`src/system/kernel_state.cpp:633-710` already holds `module_libraries_`, so
-there is a natural place to register statically. This is the largest single
-SDK change in milestone 1 and should be scheduled accordingly.
+That leaves `rexruntime` itself, the SDK's only `SHARED` target. **Implemented**
+(SDK patch 0006): the library type is gated on iOS, keeping `SHARED` elsewhere
+because `librexruntime.dylib`/`.so` is a documented desktop release artifact.
+The OBJECT libraries linked in by `src/kernel/CMakeLists.txt:69` land in the
+static archive exactly as they land in the shared object, so no source-list or
+link-visibility change was needed — verified with a minimal CMake reproduction
+of the real target shape built both ways.
+
+The same patch stops building `rexcodegen` on iOS alongside the CLI that patch
+0005 already skipped; only the CLI and unit tests link it.
+
+One constraint to preserve if guest modules are ever made shared again: a
+static `rexruntime` combined with `SHARED` guest modules is the broken
+combination, because each dylib would get its own `active_memory_`,
+`shared_kernel_state_`, PPC function registry and cvar storage. That cannot
+arise here, but it is the reason not to mix the two.
 
 Also set `REXGLUE_ENABLE_TRACY=OFF` — Tracy is built as a `SHARED` library. The
 game's `CMakeLists.txt` already forces this off.
@@ -416,9 +437,9 @@ Ordered so each step unblocks the next and produces a checkable signal.
    fmt/spdlog, tomlplusplus, snappy, xxHash, libmspack, simde, glslang,
    SPIRV-Tools, FFmpeg. FFmpeg already has its aarch64 NEON `.S` sources wired,
    so it should be less painful than feared. Tracy off (B4).
-5. **Static linking (B4).** `rexruntime` and the generated modules to `STATIC`;
-   compiled-in module registry replacing `SharedLibrary`/`dlopen`. This is the
-   biggest single change — budget for it.
+5. ~~**Static linking (B4).**~~ **Done** — SDK patch 0006, and far smaller than
+   this step assumed: only `rexruntime` needed converting, gated on iOS. The
+   generated guest code was already compiled into the executable.
 6. ~~**Guest memory (B2).**~~ **Done** - SDK patch 0002. Unlinked container-file
    backing replacing `shm_open`. All nine views verified to alias correctly at
    both page granularities by `tests/ios/guest_alias_test.cpp`; still to be run
