@@ -1,7 +1,7 @@
 From c8310ae13a0e8832cd80cc8f01ce4f1e2afa0a2e Mon Sep 17 00:00:00 2001
 From: Skate3Recomp iOS port <lmccjake@gmail.com>
 Date: Mon, 24 Aug 2026 12:22:18 +0000
-Subject: [PATCH 3/4] thread: hand-written arm64 fiber switch for iOS
+Subject: [PATCH 3/5] thread: hand-written arm64 fiber switch for iOS
 
 getcontext/makecontext/swapcontext are absent from the iOS SDK, and the fiber
 primitive is not optional - guest thread scheduling in xthread.cpp and

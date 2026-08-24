@@ -1,0 +1,36 @@
+From 3a12815ca1a52aaa35395d620570060d7218ae92 Mon Sep 17 00:00:00 2001
+From: Skate3Recomp iOS port <lmccjake@gmail.com>
+Date: Mon, 24 Aug 2026 12:27:42 +0000
+Subject: [PATCH 5/5] build: do not cross-compile the rexglue CLI to iOS
+
+rexglue translates the guest image into C++ before anything is compiled for
+the target, so it is a host tool by nature. Under an iOS toolchain it would be
+built for the device and be unrunnable, taking the whole codegen stack with it.
+
+Skip it there. Codegen is expected to have been run from a host-native build
+tree first, which writes to the source tree; the device build only compiles the
+result. rexcodegen itself is still built, since it is a library and other
+targets link it.
+---
+ CMakeLists.txt | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 368aaac..140195e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -253,7 +253,13 @@ add_subdirectory(src/graphics)
+ add_subdirectory(src/system)
+ add_subdirectory(src/kernel)
+ add_subdirectory(src/codegen)
+-add_subdirectory(src/rexglue)
++# The rexglue CLI is a host tool: it translates the guest image into C++ before
++# anything is compiled for the target. Cross-compiling it to iOS would produce a
++# binary the build cannot run, so it is skipped there and codegen is expected to
++# have been run from a host-native build tree first.
++if(NOT IOS)
++    add_subdirectory(src/rexglue)
++endif()
+ 
+ # Add tests subdirectory if tests are enabled
+ if(REXGLUE_BUILD_TESTS)

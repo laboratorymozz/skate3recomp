@@ -1,3 +1,16 @@
+# Codegen runs the rexglue CLI, which is a host tool and is not built when
+# cross-compiling to iOS. Run `generate-all` from a host-native build tree
+# instead; it writes to <source>/generated, which the iOS tree then compiles.
+# See cmake/ios.toolchain.cmake.
+if(IOS)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/sources.cmake")
+        message(FATAL_ERROR
+            "iOS builds cannot run codegen. Configure and build the generate-all "
+            "target in a host-native tree first, then reconfigure this one.")
+    endif()
+    return()
+endif()
+
 add_custom_target(generate-skate3
     COMMAND $<TARGET_FILE:rex::rexglue> codegen
             ${SKATE3_CODEGEN_ARGS}

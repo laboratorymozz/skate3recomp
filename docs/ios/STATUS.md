@@ -35,8 +35,8 @@ cmake --preset macos-release && cmake --build --preset macos-release
 
 ### In the SDK (as patches, not applied)
 
-`docs/ios/sdk-patches/`, four commits off `7eb0faf`. Blockers B1, B2, B5 and B14
-from the plan. See that directory's README for detail.
+`docs/ios/sdk-patches/`, five commits off `7eb0faf`. Blockers B1, B2, B5, B9 and
+B14 from the plan. See that directory's README for detail.
 
 ## Verify first
 

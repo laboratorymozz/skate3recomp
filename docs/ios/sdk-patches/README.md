@@ -30,6 +30,11 @@ touch small, well-separated regions and should rebase cleanly.
 | 0002 | B2 | Guest space backed by an unlinked container file instead of `shm_open`, which the iOS sandbox does not allow. |
 | 0003 | B5 | Hand-written arm64 context switch replacing the `ucontext` fibers absent from the iOS SDK. |
 | 0004 | B14 | App and user roots resolved inside the container, since the bundle is read-only. |
+| 0005 | B9 | The `rexglue` CLI is a host tool and is no longer built when cross-compiling to iOS. |
+
+Patch 0005 pairs with a guard in this repo's `cmake/CodegenTargets.cmake`, which
+now fails early with an explanation if an iOS tree is configured before codegen
+has been run on the host.
 
 Patch 0001 also adds the `ios-arm64` branch to the SDK's platform detection,
 enables the `ASM` language for iOS, and lets AppleClang through the compiler
