@@ -19,6 +19,8 @@
 #include <rex/ui/overlay/install_wizard_overlay.h>
 #include <rex/ui/windowed_app_context.h>
 
+#include "skate3_platform.h"
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -33,7 +35,7 @@
 
 namespace skate3 {
 
-#if defined(__APPLE__)
+#if SKATE3_PLATFORM_MACOS
 std::filesystem::path PickIsoFileMacOS();
 #endif
 
@@ -100,7 +102,17 @@ std::filesystem::path PickIsoFile() {
   }
   return filename;
 }
-#elif defined(__APPLE__)
+#elif SKATE3_PLATFORM_IOS
+std::filesystem::path PickIsoFile() {
+  // iOS has no NSOpenPanel equivalent that can be run modally from here -
+  // importing an ISO needs UIDocumentPickerViewController plus a
+  // security-scoped bookmark held for the whole multi-gigabyte extract, which
+  // is milestone 2 work. Until then the game data is side-loaded into the
+  // container and pointed at with the game_data_root cvar.
+  REXLOG_ERROR("iso installer: no file picker on iOS; set game_data_root to a pre-extracted copy");
+  return {};
+}
+#elif SKATE3_PLATFORM_MACOS
 std::filesystem::path PickIsoFile() {
   return skate3::PickIsoFileMacOS();
 }

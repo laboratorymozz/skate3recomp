@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The guest address space commits its 512 MB physical heap up front, and
+	     the native renderer's targets and streamed textures sit on top of that.
+	     Without this the app is jetsammed well before the main menu on a 6 GB
+	     device. Free with a development certificate; no review involved. -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+</dict>
+</plist>

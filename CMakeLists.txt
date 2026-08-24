@@ -55,6 +55,13 @@ if(WIN32)
     else()
         set(SKATE3_BUILD_PLATFORM "win-${SKATE3_TARGET_PROCESSOR}")
     endif()
+elseif(IOS)
+    # CMake sets APPLE for iOS too, so this branch must come first.
+    if(SKATE3_TARGET_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        set(SKATE3_BUILD_PLATFORM "ios-arm64")
+    else()
+        message(FATAL_ERROR "Unsupported iOS architecture: ${SKATE3_TARGET_PROCESSOR}. iOS builds are ARM64-only.")
+    endif()
 elseif(APPLE)
     if(SKATE3_TARGET_PROCESSOR MATCHES "aarch64|arm64|ARM64")
         set(SKATE3_BUILD_PLATFORM "macos-arm64")
@@ -263,7 +270,9 @@ set(SKATE3_COMMON_SOURCES
     src/skate3_win_icon.cpp
     third_party/rexglue-sdk/thirdparty/crypto/sha256.cpp
 )
-if(APPLE)
+if(APPLE AND NOT IOS)
+    # NSOpenPanel-based pickers; the iOS equivalent needs
+    # UIDocumentPickerViewController and does not exist yet.
     list(APPEND SKATE3_COMMON_SOURCES src/skate3_iso_installer_macos.mm)
 endif()
 
@@ -286,6 +295,8 @@ if(WIN32)
         @ONLY
     )
     target_sources(skate3 PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/skate3.rc)
+elseif(IOS)
+    add_executable(skate3 MACOSX_BUNDLE ${SKATE3_SOURCES})
 else()
     add_executable(skate3 ${SKATE3_SOURCES})
 endif()
@@ -357,7 +368,44 @@ endif()
 target_link_libraries(skate3 PRIVATE rex::runtime)
 rexglue_configure_target(skate3)
 
-if(APPLE)
+if(IOS)
+    target_link_libraries(skate3 PRIVATE "-framework UIKit")
+
+    # The 64 MB stack the recompiled guest code needs cannot come from
+    # -stack_size on iOS: the linker flag does not apply to the main thread,
+    # which is fixed at 1 MB. The guest has to be started on a pthread created
+    # with an explicit stack size instead - see docs/ios-port-plan.md (B11).
+
+    set(SKATE3_IOS_BUNDLE_IDENTIFIER
+        "com.skate3recomp.skate3"
+        CACHE STRING "Bundle identifier for the iOS app")
+    set(SKATE3_IOS_DEVELOPMENT_TEAM
+        ""
+        CACHE STRING "Apple Developer team ID used to sign the iOS app")
+    set(SKATE3_IOS_DEPLOYMENT_TARGET
+        "16.0"
+        CACHE STRING "Minimum iOS version the app runs on")
+
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/skate3_ios.Info.plist.in
+        ${CMAKE_CURRENT_BINARY_DIR}/skate3_ios.Info.plist
+        @ONLY
+    )
+    # The XCODE_ATTRIBUTE_* properties below only take effect under the Xcode
+    # generator. The project builds with Ninja, where they are silently
+    # ignored - a Ninja iOS build produces an unsigned bundle and needs a
+    # separate `codesign --entitlements src/skate3_ios.entitlements` pass
+    # before it will install on a device.
+    set_target_properties(skate3 PROPERTIES
+        OUTPUT_NAME "skate3recomp"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/skate3_ios.Info.plist"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${SKATE3_IOS_BUNDLE_IDENTIFIER}"
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${SKATE3_IOS_DEVELOPMENT_TEAM}"
+        XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/skate3_ios.entitlements"
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+    )
+elseif(APPLE)
     target_link_options(skate3 PRIVATE -Wl,-stack_size,0x4000000)
     target_link_libraries(skate3 PRIVATE "-framework Cocoa")
 endif()
@@ -366,15 +414,21 @@ if(WIN32)
     target_link_libraries(skate3 PRIVATE comdlg32 winhttp d3dcompiler gdiplus)
 endif()
 
-add_custom_target(skate3_stage_runtime_library
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:skate3>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:rexruntime>"
-        "$<TARGET_FILE_DIR:skate3>"
-    DEPENDS rexruntime
-    VERBATIM
-)
-add_dependencies(skate3 skate3_stage_runtime_library)
+# Staging a loose runtime library beside the executable is meaningless on iOS,
+# where dynamic libraries have to be embedded, signed frameworks. The runtime
+# and the generated guest modules need to become static libraries with a
+# compiled-in module registry instead - see docs/ios-port-plan.md (B4).
+if(NOT IOS)
+    add_custom_target(skate3_stage_runtime_library
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:skate3>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:rexruntime>"
+            "$<TARGET_FILE_DIR:skate3>"
+        DEPENDS rexruntime
+        VERBATIM
+    )
+    add_dependencies(skate3 skate3_stage_runtime_library)
+endif()
 
 if(NOT SKATE3_EFFECTIVE_TITLE_UPDATE_PACKAGE STREQUAL "")
     add_custom_target(skate3_stage_title_update_patches

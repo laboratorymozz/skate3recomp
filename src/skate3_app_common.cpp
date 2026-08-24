@@ -5,6 +5,7 @@
 #include "skate3_iso_installer.h"
 #include "skate3_native_render.h"
 #include "skate3_native_scene.h"
+#include "skate3_platform.h"
 #include "skate3_screenshot.h"
 #include "skate3_shader_disasm.h"
 #include "skate3_win_icon.h"
@@ -339,10 +340,15 @@ std::filesystem::path DefaultRoamingUserRoot() {
 }
 
 std::filesystem::path ResolveSkate3UserRoot(const rex::PathConfig& paths) {
+#if !SKATE3_PLATFORM_IOS
+  // Portable mode keeps user data beside the executable. On iOS that is the
+  // code-signed bundle, which is read-only, so every write would fail - there
+  // the user root always comes from the container.
   const auto executable_root = rex::filesystem::GetAppRootFolder();
   if (std::filesystem::exists(executable_root / "portable.txt")) {
     return executable_root;
   }
+#endif
 
   const auto old_default = DefaultDocumentsUserRoot();
   if (!paths.user_data_root.empty() && paths.user_data_root != old_default) {
@@ -544,6 +550,15 @@ void Skate3BaseApp::OnConfigureFonts(ImFontAtlas* atlas) {
       "C:\\Windows\\Fonts\\helvetica.ttf",
       "C:\\Windows\\Fonts\\HelveticaNeue.ttf",
       "C:\\Windows\\Fonts\\arial.ttf",
+#elif SKATE3_PLATFORM_IOS
+      // iOS keeps its system faces under Core/ rather than at the top level,
+      // so none of the macOS paths below resolve. FirstExistingFontPath falls
+      // through to AddFontDefault() if none of these are readable either; the
+      // durable fix is to embed a face in the bundle rather than probe for one.
+      "/System/Library/Fonts/Core/SFUI.ttf",
+      "/System/Library/Fonts/Core/HelveticaNeue.ttc",
+      "/System/Library/Fonts/Core/Helvetica.ttc",
+      "/System/Library/Fonts/CoreAddition/HelveticaNeue.ttc",
 #elif defined(__APPLE__)
       "/System/Library/Fonts/SFNS.ttf",
       "/System/Library/Fonts/SFCompact.ttf",

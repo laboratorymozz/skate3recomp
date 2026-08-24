@@ -21,6 +21,7 @@
 #include <rex/ui/overlay/acquire_wizard_overlay.h>
 #include <rex/ui/windowed_app_context.h>
 
+#include "skate3_platform.h"
 #include "third_party/rexglue-sdk/thirdparty/crypto/sha256.h"
 
 #if defined(_WIN32)
@@ -47,7 +48,7 @@ REXCVAR_DEFINE_STRING(skate3_title_update_url,
 
 namespace skate3 {
 
-#if defined(__APPLE__)
+#if SKATE3_PLATFORM_MACOS
 std::filesystem::path PickTitleUpdateFileMacOS();
 #endif
 
@@ -606,7 +607,15 @@ std::filesystem::path PickTitleUpdateFile() {
   }
   return filename;
 }
-#elif defined(__APPLE__)
+#elif SKATE3_PLATFORM_IOS
+std::filesystem::path PickTitleUpdateFile() {
+  // See the matching note in skate3_iso_installer.cpp - the picker needs
+  // UIDocumentPickerViewController, and the download path needs NSURLSession
+  // rather than the forked curl/wget this file uses elsewhere.
+  REXLOG_ERROR("title update: no file picker on iOS; place the package in the user data folder");
+  return {};
+}
+#elif SKATE3_PLATFORM_MACOS
 std::filesystem::path PickTitleUpdateFile() {
   return skate3::PickTitleUpdateFileMacOS();
 }
